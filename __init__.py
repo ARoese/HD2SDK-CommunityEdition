@@ -1,6 +1,6 @@
 bl_info = {
     "name": "Helldivers 2 SDK: Community Edition",
-    "version": (3, 10, 4),
+    "version": (3, 11, 0),
     "blender": (4, 0, 0),
     "category": "Import-Export",
 }
@@ -69,7 +69,7 @@ importlib.reload(xaml_m)
 
 from .stingray.animation import StingrayAnimation, AnimationException
 from .stingray.raw_dump import StingrayRawDump
-from .stingray.material import LoadShaderVariables, StingrayMaterial
+from .stingray.material import LoadShaderVariables, LoadTextureTypes, StingrayMaterial
 from .stingray.texture import StingrayTexture
 from .stingray.particle import StingrayParticles
 from .stingray.state_machine import StingrayStateMachine
@@ -99,6 +99,7 @@ Global_friendlynamespath = f"{AddonPath}/hashlists/friendlynames.txt"
 
 Global_archivehashpath   = f"{AddonPath}/hashlists/archivehashes.json"
 Global_variablespath     = f"{AddonPath}/hashlists/shadervariables.txt"
+Global_texturetypespath  = f"{AddonPath}/hashlists/texturetypes.txt"
 Global_bonehashpath      = f"{AddonPath}/hashlists/bonehash.txt"
 
 Global_defaultgamepath   = "C:\Program Files (x86)\Steam\steamapps\common\Helldivers 2\data\ "
@@ -162,16 +163,17 @@ TextureTypeLookup = {
         "Emission", 
         "Base Color/Metallic"
     ),
-        "armorlut": (
-        "Decal", 
+    "armorlut": (
+        "Cammo Array", 
         "", 
         "Pattern LUT", 
         "Normal", 
         "", 
         "", 
-        "Pattern Mask", 
+        "Pattern Mask Array", 
         "ID Mask Array", 
         "", 
+        "Decal",
         "Primary LUT", 
         "",
     ),
@@ -192,7 +194,7 @@ TextureTypeLookup = {
         "Normal/AO/Roughness",
         "Metallic",
         "",
-        "Color/Emission Mask",
+        "Base Color/Emission Mask",
         "",
         "",
         "",
@@ -201,20 +203,28 @@ TextureTypeLookup = {
     ),
     "translucent": (
         "Normal",
+    ),
+    "scope": (
+        "Metallic/Roughness/AO",
+        "Lens Cutout Texture",
+        "Base Color",
+        "Normal",
     )
 }
 
 Global_Materials = (
-        ("advanced", "Advanced", "A more comlpicated material, that is color, normal, emission and PBR capable which renders in the UI. Sourced from the Illuminate Overseer."),
+        ("advanced", "Advanced", "A more comlpicated material, that is color, normal, emission and PBR capable which renders in the UI. Sourced from the Illuminate Overseer"),
         ("basic+", "Basic+", "A basic material with a color, normal, and PBR map which renders in the UI, Sourced from a SEAF NPC"),
-        ("translucent", "Translucent", "A translucent with a solid set color and normal map. Sourced from the Terminid Larva Backpack."),
-        ("alphaclip+", "Alpha Clip+", "A material that supports an alpha mask which does not render in the UI. Extra features with emission. Sourced from a bot bio processor."),
+        ("translucent", "Translucent", "A translucent with a solid set color and normal map. Sourced from the Terminid Larva Backpack"),
+        ("alphaclip+", "Alpha Clip+", "A material that supports an alpha mask which does not render in the UI. Extra features with emission. Sourced from a bot bio processor"),
         ("alphaclip", "Alpha Clip", "A material that supports an alpha mask which does not render in the UI. Sourced from a skeleton pile"),
         ("original", "Original", "The original template used for all mods uploaded to Nexus prior to the addon's public release, which is bloated with additional unnecessary textures. Sourced from a terminid"),
         ("basic", "Basic", "A basic material with a color, normal, and PBR map. Sourced from a trash bag prop"),
         ("emissive", "Emissive", "A basic material with a color, normal, and emission map. Sourced from a vending machine"),
-        ("armorlut", "Armor LUT", "An advanced material using multiple mask textures and LUTs to texture the mesh only advanced users should be using this. Sourced from the base game material on Armors"),
+        ("armorlut", "Armor LUT", "An advanced material using multiple mask textures and LUTs to texture the mesh only advanced users should be using this. Sourced from the TR-8 shoulderpad"),
+        ("scope", "Scope", "A material used for scopes, with a color, normal, and metallic/roughness/AO map. Sourced from a leftover scope material")
     )
+    
 
 #endregion
 
@@ -1228,12 +1238,14 @@ def LoadStingrayMaterial(ID, TocData, GpuData, StreamData, Reload, MakeBlendObje
 
     f = MemoryStream(TocData)
     Material = StingrayMaterial()
+    Material.DEV_FileID = ID
     Material.Serialize(f)
     if MakeBlendObject and not (exists and not Reload): AddMaterialToBlend(ID, Material, Reload)
     elif force_reload: AddMaterialToBlend(ID, Material, True)
     return Material
 
-def SaveStingrayMaterial(self, ID, TocData, GpuData, StreamData, LoadedData):
+def SaveStingrayMaterial(self, ID, TocData, GpuData, StreamData, LoadedData: StingrayMaterial):
+    SaveShaderVariableData(LoadedData)
     if self.MaterialTemplate != None:
         texturesFilepaths = GenerateMaterialTextures(self)
     mat = LoadedData
@@ -1329,7 +1341,7 @@ def AddMaterialToBlend(ID, StingrayMat, EmptyMatExists=False):
     if Entry.MaterialTemplate != None: CreateAddonMaterial(ID, StingrayMat, mat, Entry)
     else: CreateGameMaterial(StingrayMat, mat)
     
-def CreateGameMaterial(StingrayMat, mat):
+def CreateGameMaterial(StingrayMat: StingrayMaterial, mat):
     for node in mat.node_tree.nodes:
         if node.bl_idname == 'ShaderNodeTexImage':
             mat.node_tree.nodes.remove(node)
@@ -1338,6 +1350,7 @@ def CreateGameMaterial(StingrayMat, mat):
     for TextureID in StingrayMat.TexIDs:
         texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
         texImage.location = (-450, height - 300*idx)
+        texImage.label = StingrayMat.TextureTypes[idx].name
 
         try:    bpy.data.images[str(TextureID)]
         except: Global_TocManager.Load(TextureID, TexID, False, True)
@@ -1347,7 +1360,7 @@ def CreateGameMaterial(StingrayMat, mat):
             pass
         idx +=1
 
-def CreateAddonMaterial(ID, StingrayMat, mat, Entry):
+def CreateAddonMaterial(ID, StingrayMat: StingrayMaterial, mat, Entry: TocEntry):
     mat.node_tree.nodes.clear()
     output = mat.node_tree.nodes.new('ShaderNodeOutputMaterial')
     output.location = (200, 300)
@@ -1368,6 +1381,7 @@ def CreateAddonMaterial(ID, StingrayMat, mat, Entry):
     for TextureID in StingrayMat.TexIDs:
         texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
         texImage.location = (-450, height - 300*idx)
+        texImage.label = StingrayMat.TextureTypes[idx].name
 
         TextureNodes.append(texImage)
 
@@ -1409,7 +1423,7 @@ def CreateAddonMaterial(ID, StingrayMat, mat, Entry):
     bsdf.inputs['IOR'].default_value = 1
     bsdf.inputs['Emission Strength'].default_value = 1
 
-    bpy.ops.file.unpack_all(method='REMOVE')
+    # bpy.ops.file.unpack_all(method="WRITE_LOCAL")
     
     PrettyPrint(f"Setting up any custom templates. Current Template: {Entry.MaterialTemplate}")
 
@@ -1421,6 +1435,7 @@ def CreateAddonMaterial(ID, StingrayMat, mat, Entry):
     elif Entry.MaterialTemplate == "alphaclip+": SetupAlphaClipPlusBlenderMaterial(nodeTree, inputNode, outputNode, bsdf, separateColor, normalMap, mat)
     elif Entry.MaterialTemplate == "advanced": SetupAdvancedBlenderMaterial(nodeTree, inputNode, outputNode, bsdf, separateColor, normalMap, TextureNodes, group, mat)
     elif Entry.MaterialTemplate == "translucent": SetupTranslucentBlenderMaterial(nodeTree, inputNode, outputNode, bsdf, separateColor, normalMap, mat)
+    elif Entry.MaterialTemplate == "scope": SetupScopeBlenderMaterial(nodeTree, inputNode, outputNode, bsdf, separateColor, normalMap, mat)
     
     warning_label = nodeTree.nodes.new('NodeFrame')
     warning_label.label = "BLENDER PREVIEW ONLY - ANY CHANGES WILL NOT AFFECT YOUR MOD!"
@@ -1431,6 +1446,69 @@ def CreateAddonMaterial(ID, StingrayMat, mat, Entry):
     warning_label.color = (1, 0, 0)
     warning_label.label_size = 20
     warning_label.shrink = True
+
+    StingrayMat.DEV_FileID = Entry.FileID
+
+def CreateShaderVariableNode(nodeTree, previousNode, data):
+    node = nodeTree.nodes.new('NodeFrame')
+    outputNode = nodeTree.nodes.get('Group Output')
+    node.location = (outputNode.location.x + 200, previousNode.location.y - 50) 
+    node.width = 250
+    node.height = 40
+    node.label_size = 8
+    node.label = data
+    return node
+
+def GetMaterialNodeTree(FileID: str) -> bpy.types.NodeTree:
+    nodeTree = None
+    mat = bpy.data.materials.get(FileID)
+    if mat != None:
+        mat_nodeTree = mat.node_tree
+        for node in mat_nodeTree.nodes:
+            if node.type == 'GROUP':
+                nodeTree = node.node_tree
+                break
+    return nodeTree
+
+def UpdateShaderVariableNodes(Entry: TocEntry):
+    StingrayMat = Entry.LoadedData
+    StingrayMat.DEV_FileID = Entry.FileID
+    nodeTree = GetMaterialNodeTree(str(Entry.FileID))
+
+    if nodeTree is None:
+        PrettyPrint(f"No node tree reference found for material. Cannot update shader variable data.", 'WARN')
+        return
+
+    for node in list(nodeTree.nodes):
+        if isinstance(node, bpy.types.NodeFrame):  
+            if node.label_size in [8, 10]: # delete shader variables and header only, not the warning label
+                nodeTree.nodes.remove(node)
+
+    outputNode = nodeTree.nodes.get('Group Output')
+    shader_data_node = nodeTree.nodes.new('NodeFrame')
+    shader_data_node.location = (outputNode.location.x + 200, outputNode.location.y) 
+    shader_data_node.width = 250
+    shader_data_node.height = 40
+    shader_data_node.label_size = 10
+    shader_data_node.label = "Shader Variable Data"
+
+    previous_node = shader_data_node
+    for variable in StingrayMat.ShaderVariables:
+        data = variable.get_encoded_data()
+        previous_node = CreateShaderVariableNode(nodeTree, previous_node, data)
+    
+    UpdateMaterialPreviews(Entry)
+
+def SaveShaderVariableData(material: StingrayMaterial):
+    nodeTree = GetMaterialNodeTree(str(material.DEV_FileID))
+    if nodeTree is None:
+        PrettyPrint(f"No node tree reference found for material. Cannot save shader variable data.", 'WARN')
+        return
+
+    for node in nodeTree.nodes:
+        if isinstance(node, bpy.types.NodeFrame) and node.label_size == 8:  # Assuming label_size 8 is unique to shader variable nodes
+            data = node.label
+            material.set_encoded_data(data)
 
 def SetupBasicBlenderMaterial(nodeTree, inputNode, outputNode, bsdf, separateColor, normalMap):
     bsdf.inputs['Emission Strength'].default_value = 0
@@ -1509,7 +1587,7 @@ def SetupAdvancedBlenderMaterial(nodeTree, inputNode, outputNode, bsdf, separate
     nodeTree.links.new(separateColorNormal.outputs['Green'], combineColorNormal.inputs['Green'])
     nodeTree.links.new(normalMap.outputs['Normal'], bsdf.inputs['Normal'])
     nodeTree.links.new(combineColorNormal.outputs['Color'], normalMap.inputs['Color'])
-    nodeTree.links.new(inputNode.outputs['Color/Emission Mask'], bsdf.inputs['Base Color'])
+    nodeTree.links.new(inputNode.outputs['Base Color/Emission Mask'], bsdf.inputs['Base Color'])
     nodeTree.links.new(inputNode.outputs['Metallic'], bsdf.inputs['Metallic'])
 
     RoughnessSocket = nodeTree.interface.new_socket(name="Normal/AO/Roughness (Alpha)", in_out ="INPUT", socket_type="NodeSocketFloat").hide_value = True
@@ -1520,9 +1598,9 @@ def SetupAdvancedBlenderMaterial(nodeTree, inputNode, outputNode, bsdf, separate
     multiplyEmission.location = (-350, -350)
     multiplyEmission.operation = 'MULTIPLY'
     multiplyEmission.inputs[1].default_value = 0
-    nodeTree.interface.new_socket(name="Color/Emission Mask (Alpha)", in_out ="INPUT", socket_type="NodeSocketFloat").hide_value = True
-    mat.node_tree.links.new(TextureNodes[5].outputs['Alpha'], group.inputs['Color/Emission Mask (Alpha)'])
-    nodeTree.links.new(inputNode.outputs['Color/Emission Mask (Alpha)'], multiplyEmission.inputs[0])
+    nodeTree.interface.new_socket(name="Base Color/Emission Mask (Alpha)", in_out ="INPUT", socket_type="NodeSocketFloat").hide_value = True
+    mat.node_tree.links.new(TextureNodes[5].outputs['Alpha'], group.inputs['Base Color/Emission Mask (Alpha)'])
+    nodeTree.links.new(inputNode.outputs['Base Color/Emission Mask (Alpha)'], multiplyEmission.inputs[0])
     nodeTree.links.new(multiplyEmission.outputs['Value'], bsdf.inputs['Emission Strength'])
     
     nodeTree.links.new(bsdf.outputs['BSDF'], outputNode.inputs['Surface'])
@@ -1536,6 +1614,16 @@ def SetupTranslucentBlenderMaterial(nodeTree, inputNode, outputNode, bsdf, separ
     mat.blend_method = 'BLEND'
     bsdf.inputs['Alpha'].default_value = 0.02
     bsdf.inputs['Base Color'].default_value = (1, 1, 1, 1)
+
+def SetupScopeBlenderMaterial(nodeTree, inputNode, outputNode, bsdf, separateColor, normalMap, mat):
+    bsdf.inputs['Emission Strength'].default_value = 0
+    inputNode.location = (-750, 0)
+    SetupNormalMapTemplate(nodeTree, inputNode, normalMap, bsdf)
+    nodeTree.links.new(inputNode.outputs['Base Color'], bsdf.inputs['Base Color'])
+    nodeTree.links.new(inputNode.outputs['Metallic/Roughness/AO'], separateColor.inputs['Color'])
+    nodeTree.links.new(separateColor.outputs['Red'], bsdf.inputs['Metallic'])
+    nodeTree.links.new(separateColor.outputs['Green'], bsdf.inputs['Roughness'])
+    nodeTree.links.new(bsdf.outputs['BSDF'], outputNode.inputs['Surface'])
 
 def CreateGenericMaterial(ID, StingrayMat, mat):
     idx = 0
@@ -1553,7 +1641,7 @@ def CreateGenericMaterial(ID, StingrayMat, mat):
             pass
         idx +=1
 
-def GenerateMaterialTextures(Entry):
+def GenerateMaterialTextures(Entry: TocEntry):
     material = group = None
     for mat in bpy.data.materials:
         if mat.name == str(Entry.FileID):
@@ -1575,7 +1663,7 @@ def GenerateMaterialTextures(Entry):
             for link in input_socket.links:
                 image = link.from_node.image
                 if image.packed_file:
-                    raise Exception(f"Image: {image.name} is packed. Please unpack your image.")
+                    image.unpack(method="WRITE_LOCAL")
                 path = bpy.path.abspath(image.filepath)
                 PrettyPrint(f"Getting image path at: {path}")
                 ID = image.name.split(".")[0]
@@ -1586,35 +1674,43 @@ def GenerateMaterialTextures(Entry):
                 filepaths.append(path)
 
                 # enforce proper colorspace for abnormal stingray textures
-                if "Normal" in input_socket.name or "Color/Emission Mask" in input_socket.name:
+                if "Normal" in input_socket.name or "Base Color/Emission Mask" in input_socket.name:
                      image.colorspace_settings.name = 'Non-Color'
     
+    UpdateMaterialPreviews(Entry)
+
+    PrettyPrint(f"Found {len(filepaths)} Images: {filepaths}")
+    return filepaths
+
+def UpdateMaterialPreviews(Entry: TocEntry):
+    node_tree = GetMaterialNodeTree(str(Entry.FileID))
+    if node_tree is None:
+        PrettyPrint(f"No node tree reference found for material. Cannot update material previews.", 'WARN')
+        return
+
     # display proper emissives on advanced material
-    if "advanced" in group.node_tree.name:
+    if "advanced" in node_tree.name:
         colorVariable = Entry.LoadedData.ShaderVariables[32].values
         emissionColor = (colorVariable[0], colorVariable[1], colorVariable[2], 1)
         emissionStrength = Entry.LoadedData.ShaderVariables[40].values[0]
         emissionStrength = max(0, emissionStrength)
         PrettyPrint(f"Emission color: {emissionColor} Strength: {emissionStrength}")
-        for node in group.node_tree.nodes:
+        for node in node_tree.nodes:
             if node.type == 'BSDF_PRINCIPLED':
                 node.inputs['Emission Color'].default_value = emissionColor
             if node.type == 'MATH' and node.operation == 'MULTIPLY':
                 node.inputs[1].default_value = emissionStrength
-
+    
     # update color and alpha of translucent
-    if "translucent" in group.node_tree.name:
+    if "translucent" in node_tree.name:
         colorVariable = Entry.LoadedData.ShaderVariables[7].values
         baseColor = (colorVariable[0], colorVariable[1], colorVariable[2], 1)
         alphaVariable = Entry.LoadedData.ShaderVariables[1].values[0]
         PrettyPrint(f"Base color: {baseColor} Alpha: {alphaVariable}")
-        for node in group.node_tree.nodes:
+        for node in node_tree.nodes:
             if node.type == 'BSDF_PRINCIPLED':
                 node.inputs['Base Color'].default_value = baseColor
                 node.inputs['Alpha'].default_value = alphaVariable
-
-    PrettyPrint(f"Found {len(filepaths)} Images: {filepaths}")
-    return filepaths
 
 #endregion
 
@@ -2480,6 +2576,7 @@ class MaterialShaderVariableEntryOperator(Operator):
         Entry = Global_TocManager.GetEntry(self.object_id, MaterialID)
         if Entry:
             Entry.LoadedData.ShaderVariables[self.variable_index].values[self.value_index] = self.value
+            UpdateShaderVariableNodes(Entry)
             PrettyPrint(f"Set value to: {self.value} at variable: {self.variable_index} value: {self.value_index} for material ID: {self.object_id}")
         else:
             self.report({'ERROR'}, f"Could not find entry for ID: {self.object_id}")
@@ -2514,6 +2611,7 @@ class MaterialShaderVariableColorEntryOperator(Operator):
         if Entry:
             for idx in range(3):
                 Entry.LoadedData.ShaderVariables[self.variable_index].values[idx] = self.color[idx]
+            UpdateShaderVariableNodes(Entry)
             PrettyPrint(f"Set color to: {self.color}for material ID: {self.object_id}")
         else:
             self.report({'ERROR'}, f"Could not find entry for ID: {self.object_id}")
@@ -4776,16 +4874,21 @@ class HellDivers2ToolsPanel(Panel):
     bl_region_type = "UI"
     bl_category = "Modding"
 
-    def draw_material_editor(self, Entry, layout, row):
+    def draw_material_editor(self, Entry: TocEntry, layout, row):
         if Entry.IsLoaded:
-            mat = Entry.LoadedData
+            mat: StingrayMaterial = Entry.LoadedData
             for i, t in enumerate(mat.TexIDs):
                 row = layout.row(); row.separator(factor=2.0)
                 ddsPath = mat.DEV_DDSPaths[i]
                 if ddsPath != None: filepath = Path(ddsPath)
                 label = filepath.name if ddsPath != None else str(t)
+                name = "Unknown"
+                texture_type = mat.TextureTypes[i]
+                if texture_type != None:
+                    name = texture_type.name
                 if Entry.MaterialTemplate != None:
-                    label = TextureTypeLookup[Entry.MaterialTemplate][i] + ": " + label
+                    name = TextureTypeLookup[Entry.MaterialTemplate][i]
+                label = name + ": " + label
                 material_texture_entry = row.operator("helldiver2.material_texture_entry", icon='FILE_IMAGE', text=label, emboss=False)
                 material_texture_entry.object_id = str(t)
                 material_texture_entry.texture_index = str(i)
@@ -5610,6 +5713,7 @@ def register():
     LoadNameHashes()
     LoadArchiveHashes()
     LoadShaderVariables(Global_variablespath)
+    LoadTextureTypes(Global_texturetypespath)
     LoadBoneHashes(Global_bonehashpath, Global_BoneNames)
     for cls in classes:
         bpy.utils.register_class(cls)
